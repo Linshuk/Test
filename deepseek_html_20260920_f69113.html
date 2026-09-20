@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>地质内力作用 · 地貌演化对比</title>
+<style>
+  *{box-sizing:border-box;}
+  body{
+    margin:0; min-height:100vh;
+    background:radial-gradient(1200px 700px at 50% -15%, #16224a 0%, #070b16 65%);
+    color:#dbe6f5;
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .app{max-width:1160px; margin:0 auto; padding:20px 18px 40px;}
+  header h1{margin:0; font-size:19px; letter-spacing:.5px; font-weight:600;}
+  header .sub{margin:6px 0 0; font-size:12.5px; color:#8fa3c0;}
+
+  .tabs{display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 14px;}
+  .tabs button{
+    padding:9px 16px; border-radius:10px; cursor:pointer; font-family:inherit;
+    font-size:12.5px; letter-spacing:.3px;
+    background:linear-gradient(180deg,#18243f,#111a2f);
+    color:#9db0cc; border:1px solid #24324f;
+    transition:.18s;
+  }
+  .tabs button:hover{color:#cfe0f8; border-color:#35507d;}
+  .tabs button.active{
+    background:linear-gradient(180deg,#1d4b7d,#143458);
+    color:#bfe4ff; border-color:#3f7ab8;
+    box-shadow:0 0 18px rgba(70,150,240,.25);
+  }
+
+  .stage{
+    position:relative; width:100%; height:min(62vh, 540px);
+    border-radius:16px; overflow:hidden;
+    border:1px solid #22304f;
+    box-shadow:0 22px 60px rgba(0,0,0,.55);
+  }
+  canvas{display:block; width:100%; height:100%;}
+
+  .bar{display:flex; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap;}
+  .bar button{
+    padding:9px 20px; border-radius:10px; cursor:pointer; font-family:inherit;
+    font-size:13px; background:linear-gradient(180deg,#1e3a68,#16294b);
+    color:#dbe9ff; border:1px solid #2c4f86; transition:.15s;
+  }
+  .bar button:hover{background:linear-gradient(180deg,#265089,#1b3560);}
+  .bar button:active{transform:translateY(1px);}
+  .spd{display:flex; align-items:center; gap:9px; font-size:12.5px; color:#8fa3c0;}
+  .spd input[type=range]{
+    -webkit-appearance:none; appearance:none; width:130px; height:4px; border-radius:4px;
+    background:linear-gradient(90deg,#2c8fe0,#1a2a4a); outline:none; cursor:pointer;
+  }
+  .spd input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+    background:#7fc4ff; border:2px solid #0b1226; cursor:pointer;
+  }
+  .spd input[type=range]::-moz-range-thumb{
+    width:14px; height:14px; border-radius:50%; background:#7fc4ff;
+    border:2px solid #0b1226; cursor:pointer;
+  }
+  #spdVal{font-variant-numeric:tabular-nums; color:#b9cfe8; min-width:36px;}
+
+  .desc{
+    margin-top:16px; padding:14px 18px;
+    background:linear-gradient(180deg, rgba(24,36,68,.7), rgba(14,22,44,.7));
+    border:1px solid #22304f; border-left:3px solid #3f7ab8;
+    border-radius:12px; font-size:13.5px; line-height:1.85; color:#a9bdd8;
+  }
+  .desc b{color:#cfe4ff; font-weight:600;}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>地质内力作用 · 地貌演化对比</h1>
+    <p class="sub">左侧为「演化前」原始岩层　|　右侧为「演化中」内力作用塑造的地貌</p>
+  </header>
+
+  <div class="tabs" id="tabs">
+    <button data-mode="compress" class="active">水平挤压 → 褶皱山脉</button>
+    <button data-mode="stretch">水平拉伸 → 裂谷地堑</button>
+    <button data-mode="vertical">垂直运动 → 高原抬升</button>
+    <button data-mode="magma">岩浆作用 → 火山地貌</button>
+    <button data-mode="meta">变质作用 → 变质带</button>
+  </div>
+
+  <div class="stage"><canvas id="cv"></canvas></div>
+
+  <div class="bar">
+    <button id="btnPlay">暂停</button>
+    <button id="btnReset">重播</button>
+    <label class="spd">速度
+      <input type="range" id="speed" min="0.3" max="2.5" step="0.1" value="1">
+      <span id="spdVal">1.0×</span>
+    </label>
+  </div>
+
+  <div class="desc" id="desc"></div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ============================================================
+   基础
+============================================================ */
+const cv     = document.getElementById('cv');
+const ctx    = cv.getContext('2d');
+const descEl = document.getElementById('desc');
+const btnPlay= document.getElementById('btnPlay');
+
+let W = 0, H = 0;
+
+/* ============================================================
+   配置
+============================================================ */
+const MODES = {
+  compress: {
+    dur: 5.0,
+    desc: '岩层受<b>水平挤压力</b>发生弯曲变形，形成<b>褶皱</b>：向上拱起为<b>背斜</b>（常成为山岭），向下凹陷为<b>向斜</b>（常成为谷地）。挤压强烈时地表隆起形成高大山脉，如喜马拉雅山脉、阿尔卑斯山脉。'
+  },
+  stretch: {
+    dur: 5.0,
+    desc: '岩层受<b>水平拉张力</b>，地壳被拉薄、断裂下陷，形成<b>裂谷</b>或<b>地堑</b>。两侧岩块相对上升，中间岩块相对下降。东非大裂谷、莱茵地堑、汾河谷地是典型实例。'
+  },
+  vertical: {
+    dur: 4.0,
+    desc: '地壳沿<b>垂直方向</b>整体上升或下降，引起地表高低起伏、海陆变迁。上升形成高原、山地（如青藏高原），下降则接受沉积或海水入侵。'
+  },
+  magma: {
+    dur: 6.5,
+    desc: '地下岩浆沿裂隙上升：侵入岩层内部冷凝形成<b>侵入岩</b>（岩基、岩床、岩墙）；喷出地表则形成<b>喷出岩</b>与火山地貌（火山锥、熔岩流）。'
+  },
+  meta: {
+    dur: 5.5,
+    desc: '在<b>高温、高压</b>条件下，原有岩石的矿物成分与结构发生改变，形成<b>变质岩</b>。越靠近岩浆侵入体，温度越高，变质程度越深。由内向外形成：接触变质带 → 区域变质带。'
+  }
+};
+
+const state = {
+  mode: 'compress',
+  p: 0,
+  playing: true,
+  speed: 1
+};
+
+/* 地层（自上而下） */
+const LAYERS = [
+  { c: '#c9a877', n: '沉积岩' },
+  { c: '#a87d52', n: '砂岩'   },
+  { c: '#7f8f66', n: '页岩'   },
+  { c: '#8ba6b8', n: '石灰岩' },
+  { c: '#6d5f7e', n: '花岗岩基底' }
+];
+const FRACS = [0, 0.10, 0.26, 0.46, 0.70, 1.0];
+
+/* ============================================================
+   工具
+============================================================ */
+const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const lerp  = (a,b,t) => a + (b-a)*t;
+const easeInOut = x => x<0.5 ? 2*x*x : 1-Math.pow(-2*x+2,2)/2;
+
+function hexToRgb(h){
+  const n = parseInt(h.slice(1),16);
+  return [(n>>16)&255,(n>>8)&255,n&255];
+}
+function shade(hex,f){
+  const [r,g,b] = hexToRgb(hex);
+  const c = v => clamp(Math.round(v*f),0,255);
+  return `rgb(${c(r)},${c(g)},${c(b)})`;
+}
+
+function roundRect(c, x, y, w, h, r){
+  r = Math.min(r, w/2, h/2);
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y,     x + w, y + h, r);
+  c.arcTo(x + w, y + h, x,     y + h, r);
+  c.arcTo(x,     y + h, x,     y,     r);
+  c.arcTo(x,     y,     x + w, y,     r);
+  c.closePath();
+}
+
+function drawHArrow(x0,x1,y,color,lw){
+  const dx = x1-x0, len = Math.abs(dx);
+  if (len < 5) return;
+  const dir = Math.sign(dx);
+  const head = Math.min(13, len*0.5);
+  ctx.strokeStyle = color;
+  ctx.fillStyle   = color;
+  ctx.lineWidth   = lw;
+  ctx.lineCap     = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x0,y);
+  ctx.lineTo(x1-dir*head, y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x1,y);
+  ctx.lineTo(x1-dir*head, y-head*0.62);
+  ctx.lineTo(x1-dir*head, y+head*0.62);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawVArrow(x,y0,y1,color,lw){
+  const dy = y1-y0, len = Math.abs(dy);
+  if (len < 5) return;
+  const dir = Math.sign(dy);
+  const head = Math.min(13, len*0.5);
+  ctx.strokeStyle = color;
+  ctx.fillStyle   = color;
+  ctx.lineWidth   = lw;
+  ctx.lineCap     = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x,y0);
+  ctx.lineTo(x, y1-dir*head);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x,y1);
+  ctx.lineTo(x-head*0.62, y1-dir*head);
+  ctx.lineTo(x+head*0.62, y1-dir*head);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/* ============================================================
+   地层变形函数
+============================================================ */
+// 褶皱：中心隆起，两侧逐渐降低
+function foldProfile(u, depth){
+  const decay    = 1 - depth * 0.55;
+  const envelope = Math.sin(u * Math.PI);            // 边缘归零
+  const w        = Math.cos((u - 0.5) * Math.PI * 3.2) * 0.5 + 0.5;
+  return w * decay * envelope;
+}
+
+// 裂谷：中心下陷，越深下陷越大
+function sagProfile(u, depth){
+  const decay    = 0.4 + 0.6 * depth;
+  const envelope = Math.sin(u * Math.PI);
+  const s        = Math.exp(-Math.pow((u - 0.5) * 3.2, 2));
+  return s * decay * envelope;
+}
+
+function layerY(u, depth, g){
+  let y = g.surfY + depth * (g.botY - g.surfY);
+
+  if (g.mode === 'compress' && g.foldAmt > 0){
+    y -= g.foldAmt * foldProfile(u, depth);
+  } else if (g.mode === 'stretch' && g.sagAmt > 0){
+    y += g.sagAmt * sagProfile(u, depth);
+  }
+  return y;
+}
+
+/* ============================================================
+   绘制 · 天空
+============================================================ */
+function drawSky(g){
+  const grad = ctx.createLinearGradient(0, 0, 0, g.surfY + 2);
+  grad.addColorStop(0,   '#0b1224');
+  grad.addColorStop(0.5, '#121c34');
+  grad.addColorStop(1,   '#1a2748');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, g.pw, g.surfY + 2);
+}
+
+/* ============================================================
+   绘制 · 软流层
+============================================================ */
+function drawAstheno(g){
+  if (g.botY >= g.ph) return;
+
+  const grad = ctx.createLinearGradient(0, g.botY, 0, g.ph);
+  grad.addColorStop(0,   '#4a1810');
+  grad.addColorStop(0.5, '#64200f');
+  grad.addColorStop(1,   '#8a2f12');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, g.botY, g.pw, g.ph - g.botY);
+
+  // 流动纹理
+  ctx.save();
+  ctx.globalAlpha = 0.14;
+  ctx.strokeStyle = '#ff9a55';
+  ctx.lineWidth = 1.2;
+  const off = (performance.now() * 0.02) % 50;
+  for (let k = 0; k < 3; k++){
+    ctx.beginPath();
+    for (let x = -20; x <= g.pw + 20; x += 10){
+      const y = g.botY + 14 + k*22 + Math.sin((x + off + k*70) * 0.02) * 5;
+      x === -20 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // 顶部边缘高亮
+  ctx.strokeStyle = 'rgba(255, 140, 60, 0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, g.botY);
+  ctx.lineTo(g.pw, g.botY);
+  ctx.stroke();
+}
+
+/* ============================================================
+   绘制 · 地层
+============================================================ */
+function drawStrata(g){
+  const N = LAYERS.length;
+  const S = 110;
+
+  for (let i = 0; i < N; i++){
+    const dTop = FRACS[i];
+    const dBot = FRACS[i+1];
+
+    ctx.beginPath();
+    for (let s = 0; s <= S; s++){
+      const u = s/S, x = u * g.pw;
+      const y = layerY(u, dTop, g);
+      s === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    for (let s = S; s >= 0; s--){
+      const u = s/S, x = u * g.pw;
+      ctx.lineTo(x, layerY(u, dBot, g));
+    }
+    ctx.closePath();
+
+    const grad = ctx.createLinearGradient(0, g.surfY, 0, g.botY);
+    grad.addColorStop(0,   shade(LAYERS[i].c, 1.15));
+    grad.addColorStop(0.5, LAYERS[i].c);
+    grad.addColorStop(1,   shade(LAYERS[i].c, 0.68));
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // 地表高光线
+  ctx.beginPath();
+  for (let s = 0; s <= S; s++){
+    const u = s/S, x = u * g.pw;
+    const y = layerY(u, 0, g);
+    s === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle = 'rgba(160, 220, 255, 0.5)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+/* ============================================================
+   地貌特征 · 水平挤压
+============================================================ */
+function drawCompressFeatures(g, t){
+  const alpha = clamp(t * 2.5, 0, 1);
+  const y = g.surfY + (g.botY - g.surfY) * 0.55;
+  const len = 28 + 50 * t;
+
+  // 挤压力箭头
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  drawHArrow(8, 8 + len, y, '#ff6b5a', 3.5);
+  drawHArrow(g.pw - 8, g.pw - 8 - len, y, '#ff6b5a', 3.5);
+
+  ctx.font = '600 11px system-ui, sans-serif';
+  ctx.fillStyle = '#ff9c8c';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('挤压 →', 8, y - 9);
+  ctx.textAlign = 'right';
+  ctx.fillText('← 挤压', g.pw - 8, y - 9);
+  ctx.restore();
+
+  // 背斜 / 向斜 标注
+  if (t > 0.35){
+    const a = clamp((t - 0.35) / 0.4, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.font = '600 11.5px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+
+    // 背斜（中心山峰）
+    const peakX = g.pw * 0.5;
+    const peakY = layerY(0.5, 0, g);
+    ctx.fillStyle = '#ffe08a';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('背斜（山）', peakX, peakY - 12);
+
+    // 向斜（两侧低洼）
+    ctx.fillStyle = '#9fb8d8';
+    const syn1X = g.pw * 0.19, syn1Y = layerY(0.19, 0, g);
+    ctx.fillText('向斜（谷）', syn1X, syn1Y - 8);
+    const syn2X = g.pw * 0.81, syn2Y = layerY(0.81, 0, g);
+    ctx.fillText('向斜（谷）', syn2X, syn2Y - 8);
+
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   地貌特征 · 水平拉伸
+============================================================ */
+function drawStretchFeatures(g, t){
+  const alpha = clamp(t * 2.5, 0, 1);
+  const y = g.surfY + (g.botY - g.surfY) * 0.45;
+  const len = 28 + 50 * t;
+
+  // 拉张力箭头
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  drawHArrow(g.pw * 0.38, g.pw * 0.38 - len, y, '#5dd4ff', 3.5);
+  drawHArrow(g.pw * 0.62, g.pw * 0.62 + len, y, '#5dd4ff', 3.5);
+
+  ctx.font = '600 11px system-ui, sans-serif';
+  ctx.fillStyle = '#8ae0ff';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('← 拉张', g.pw * 0.38, y - 9);
+  ctx.textAlign = 'left';
+  ctx.fillText('拉张 →', g.pw * 0.62, y - 9);
+  ctx.restore();
+
+  // 断层线
+  if (t > 0.25){
+    ctx.save();
+    ctx.globalAlpha = clamp((t - 0.25) / 0.4, 0, 1);
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(140, 220, 255, 0.7)';
+    ctx.lineWidth = 1.5;
+
+    [0.34, 0.66].forEach(u => {
+      const x0 = g.pw * u - 22;
+      const y0 = layerY(u, 0, g);
+      const x1 = g.pw * u + 22;
+      const y1 = layerY(u, 1, g);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // 裂谷底部水体
+  if (t > 0.5){
+    const a = clamp((t - 0.5) / 0.4, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = a * 0.55;
+
+    const cx = g.pw * 0.5;
+    const bottomY = layerY(0.5, 0, g);
+    ctx.beginPath();
+    ctx.ellipse(cx, bottomY + 4, g.pw * 0.17, 5.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(70, 170, 230, 0.6)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 地堑标注
+  if (t > 0.5){
+    ctx.save();
+    ctx.globalAlpha = clamp((t - 0.5) / 0.4, 0, 1);
+    ctx.font = '600 11.5px system-ui, sans-serif';
+    ctx.fillStyle = '#9ce4ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    const labY = layerY(0.5, 0.75, g);
+    ctx.fillText('地堑（裂谷）', g.pw * 0.5, labY + 6);
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   地貌特征 · 垂直运动
+============================================================ */
+function drawVerticalFeatures(g, t, baseSurfY){
+  // 原始地表参考线
+  ctx.save();
+  ctx.setLineDash([6, 5]);
+  ctx.strokeStyle = 'rgba(150, 210, 255, 0.45)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(0, baseSurfY);
+  ctx.lineTo(g.pw, baseSurfY);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.font = '10.5px ui-monospace, monospace';
+  ctx.fillStyle = 'rgba(150, 210, 255, 0.6)';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('原始地表', 8, baseSurfY - 4);
+  ctx.restore();
+
+  if (t < 0.05) return;
+
+  // 上升箭头
+  ctx.save();
+  ctx.globalAlpha = clamp(t * 2.5, 0, 1);
+
+  const ax = g.pw * 0.82;
+  drawVArrow(ax, baseSurfY, g.surfY, '#7de89a', 3.5);
+
+  ctx.font = '600 11.5px system-ui, sans-serif';
+  ctx.fillStyle = '#9df0b4';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('抬升', ax + 10, (baseSurfY + g.surfY) / 2);
+  ctx.restore();
+
+  // 高原标注
+  if (t > 0.5){
+    ctx.save();
+    ctx.globalAlpha = clamp((t - 0.5) / 0.4, 0, 1);
+    ctx.font = '600 11.5px system-ui, sans-serif';
+    ctx.fillStyle = '#c9e8ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('高原 / 山地', g.pw * 0.5, g.surfY - 8);
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   地貌特征 · 岩浆作用
+============================================================ */
+function drawMagmaFeatures(g, t){
+  const cx = g.pw * 0.45;
+  const chamberY = g.botY - g.ph * 0.06;
+  const chamberR = g.ph * 0.085;
+
+  // --- 岩浆房 ---
+  const cp = clamp(t / 0.35, 0, 1);
+  if (cp > 0.01){
+    const cr = chamberR * easeInOut(cp);
+    const cg = ctx.createRadialGradient(cx, chamberY, 0, cx, chamberY, cr*1.8);
+    cg.addColorStop(0,   '#fff4c0');
+    cg.addColorStop(0.3, '#ffb84a');
+    cg.addColorStop(0.65,'#e04a18');
+    cg.addColorStop(1,   'rgba(120,20,10,0)');
+
+    ctx.beginPath();
+    ctx.ellipse(cx, chamberY, cr*1.6, cr, 0, 0, Math.PI*2);
+    ctx.fillStyle = cg;
+    ctx.fill();
+  }
+
+  // --- 岩墙（上升通道） ---
+  const dikeP = clamp((t - 0.2) / 0.5, 0, 1);
+  if (dikeP > 0.01){
+    const topY = lerp(chamberY - chamberR*0.3, g.surfY + 5, easeInOut(dikeP));
+    const wBot = g.pw * 0.022;
+    const wTop = g.pw * 0.008;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(255, 120, 40, 0.8)';
+    ctx.shadowBlur = 16;
+
+    ctx.beginPath();
+    ctx.moveTo(cx - wBot, chamberY);
+    ctx.lineTo(cx - wTop, topY);
+    ctx.lineTo(cx + wTop, topY);
+    ctx.lineTo(cx + wBot, chamberY);
+    ctx.closePath();
+
+    const dg = ctx.createLinearGradient(0, topY, 0, chamberY);
+    dg.addColorStop(0,   '#ffe89a');
+    dg.addColorStop(0.35,'#ff8f34');
+    dg.addColorStop(1,   '#c02a10');
+    ctx.fillStyle = dg;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // --- 火山锥 + 喷发 ---
+  const eruptP = clamp((t - 0.65) / 0.35, 0, 1);
+  if (eruptP > 0.01){
+    const e = easeInOut(eruptP);
+    const vw = g.pw * 0.13 * e;
+    const vh = g.ph * 0.10 * e;
+    const vy = g.surfY;
+
+    // 火山锥体
+    ctx.beginPath();
+    ctx.moveTo(cx - vw, vy + 4);
+    ctx.lineTo(cx, vy - vh);
+    ctx.lineTo(cx + vw, vy + 4);
+    ctx.closePath();
+    const vg = ctx.createLinearGradient(0, vy - vh, 0, vy + 4);
+    vg.addColorStop(0, '#6a3f25');
+    vg.addColorStop(1, '#2e1a12');
+    ctx.fillStyle = vg;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // 熔岩流
+    ctx.beginPath();
+    ctx.moveTo(cx - vw*0.15, vy - vh*0.7);
+    ctx.quadraticCurveTo(cx - vw*0.5, vy - vh*0.1, cx - vw*1.1, vy + 2);
+    ctx.strokeStyle = '#ff7a2a';
+    ctx.lineWidth = Math.max(2.5, 6*e);
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // 火山灰
+    ctx.save();
+    ctx.globalAlpha = 0.3 * e;
+    ctx.fillStyle = '#b0b0c0';
+    for (let k = 0; k < 7; k++){
+      const ph2 = (performance.now()*0.0005 + k*0.15) % 1;
+      const px2 = cx + Math.sin(k*2.1 + ph2*5) * vw * 0.8;
+      const py2 = vy - vh - ph2 * g.ph * 0.12;
+      const pr = (5 + k*2) * (1 - ph2*0.6) * e;
+      ctx.beginPath();
+      ctx.arc(px2, py2, pr, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 标注
+  if (t > 0.5){
+    ctx.save();
+    ctx.globalAlpha = clamp((t - 0.5) / 0.3, 0, 1);
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = '#ffc98a';
+    ctx.fillText('岩浆房', cx, chamberY + chamberR + 14);
+
+    if (eruptP > 0.5){
+      ctx.fillStyle = '#ffb07a';
+      ctx.fillText('火山锥', cx, g.surfY - g.ph*0.10 - 8);
+    }
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   地貌特征 · 变质作用
+============================================================ */
+function drawMetaFeatures(g, t){
+  const ix = g.pw * 0.4;
+  const iy = g.botY - g.ph * 0.10;
+  const iR = g.ph * 0.07;
+
+  // --- 侵入体 ---
+  const ig = ctx.createRadialGradient(ix, iy, 0, ix, iy, iR*1.8);
+  ig.addColorStop(0,   '#fff2b8');
+  ig.addColorStop(0.3, '#ffa64a');
+  ig.addColorStop(0.65,'#c9341c');
+  ig.addColorStop(1,   'rgba(130,20,20,0)');
+
+  ctx.beginPath();
+  ctx.ellipse(ix, iy, iR*1.7, iR*1.1, 0, 0, Math.PI*2);
+  ctx.fillStyle = ig;
+  ctx.fill();
+
+  // --- 变质晕 ---
+  const hp = clamp(t / 0.9, 0, 1);
+  const HR = g.ph * 0.55 * easeInOut(hp);
+
+  if (HR > 4){
+    ctx.save();
+    // 裁切到地壳范围内
+    ctx.beginPath();
+    ctx.rect(0, g.surfY, g.pw, g.botY - g.surfY);
+    ctx.clip();
+
+    const hg = ctx.createRadialGradient(ix, iy, iR*0.8, ix, iy, HR);
+    hg.addColorStop(0,   'rgba(255, 150, 70, 0.55)');
+    hg.addColorStop(0.3, 'rgba(210, 90, 70, 0.4)');
+    hg.addColorStop(0.6, 'rgba(130, 75, 140, 0.25)');
+    hg.addColorStop(1,   'rgba(70, 50, 110, 0)');
+
+    ctx.fillStyle = hg;
+    ctx.fillRect(0, g.surfY, g.pw, g.botY - g.surfY);
+    ctx.restore();
+  }
+
+  // --- 变质带分界线 ---
+  if (t > 0.35){
+    ctx.save();
+    ctx.globalAlpha = clamp((t - 0.35) / 0.5, 0, 0.6);
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 1.3;
+
+    const bands = [
+      { r: iR*2.2, c: 'rgba(255,200,120,0.9)' },
+      { r: iR*3.6, c: 'rgba(220,150,130,0.75)' },
+      { r: iR*5.2, c: 'rgba(160,120,190,0.6)'  }
+    ];
+
+    bands.forEach((b, k) => {
+      const rr = b.r * easeInOut(clamp((t - 0.35 - k*0.1) / 0.5, 0, 1));
+      if (rr < 3) return;
+      ctx.strokeStyle = b.c;
+      ctx.beginPath();
+      ctx.ellipse(ix, iy, rr*1.4, rr, 0, 0, Math.PI*2);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // --- 标注 ---
+  if (t > 0.4){
+    ctx.save();
+    ctx.globalAlpha = clamp((t - 0.4) / 0.35, 0, 1);
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = '#ffcf9a';
+    ctx.fillText('接触变质带', ix + iR*3.0, iy - iR*1.8);
+
+    if (t > 0.65){
+      ctx.fillStyle = '#c8aee8';
+      ctx.fillText('区域变质带', ix - g.pw*0.25, iy - iR*3.2);
+    }
+
+    ctx.fillStyle = '#ffb37a';
+    ctx.fillText('侵入体', ix, iy + iR + 14);
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   绘制面板
+============================================================ */
+let panelTop = 0, panelH = 0;
+
+function drawPanel(px, pw, mode, t, evolving){
+  ctx.save();
+  ctx.translate(px, panelTop);
+
+  // 裁剪到圆角矩形
+  roundRect(ctx, 0, 0, pw, panelH, 12);
+  ctx.clip();
+
+  // 基础几何
+  const baseSurfY = panelH * 0.30;
+  const baseBotY  = panelH * 0.82;
+
+  let surfY = baseSurfY;
+  let botY  = baseBotY;
+  let foldAmt = 0;
+  let sagAmt  = 0;
+
+  if (evolving){
+    switch (mode){
+      case 'compress':
+        foldAmt = panelH * 0.16 * t;
+        break;
+      case 'stretch':
+        sagAmt = panelH * 0.18 * t;
+        break;
+      case 'vertical': {
+        const rise = panelH * 0.16 * t;
+        surfY = baseSurfY - rise;
+        botY  = baseBotY  - rise;
+        break;
+      }
+    }
+  }
+
+  const g = { pw, ph: panelH, surfY, botY, mode, foldAmt, sagAmt };
+
+  // 依次绘制
+  drawSky(g);
+  drawAstheno(g);
+  drawStrata(g);
+
+  if (evolving){
+    switch (mode){
+      case 'compress': drawCompressFeatures(g, t); break;
+      case 'stretch' : drawStretchFeatures(g, t);  break;
+      case 'vertical': drawVerticalFeatures(g, t, baseSurfY); break;
+      case 'magma'   : drawMagmaFeatures(g, t);    break;
+      case 'meta'    : drawMetaFeatures(g, t);     break;
+    }
+  }
+
+  ctx.restore();
+
+  // 面板描边
+  ctx.save();
+  roundRect(ctx, px, panelTop, pw, panelH, 12);
+  ctx.strokeStyle = 'rgba(60, 100, 160, 0.45)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ============================================================
+   面板标题
+============================================================ */
+function drawPanelLabels(leftX, rightX, pw){
+  ctx.save();
+  ctx.font = '600 12.5px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+
+  ctx.fillStyle = 'rgba(150, 180, 220, 0.7)';
+  ctx.fillText('演化前', leftX + pw/2, panelTop - 7);
+
+  ctx.fillStyle = '#8ecbff';
+  ctx.fillText('演化中', rightX + pw/2, panelTop - 7);
+
+  ctx.restore();
+}
+
+/* ============================================================
+   主渲染
+============================================================ */
+function render(){
+  if (!W || !H) return;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // 背景
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#070b16');
+  bg.addColorStop(1, '#0d1428');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // 布局
+  const margin = 12;
+  const gap = 14;
+  const panelW = (W - margin*2 - gap) / 2;
+  const leftX  = margin;
+  const rightX = margin + panelW + gap;
+
+  panelTop = 38;
+  panelH = H - panelTop - 14;
+
+  const t = easeInOut(state.p);
+
+  // 左侧：演化前
+  drawPanel(leftX, panelW, state.mode, 0, false);
+
+  // 右侧：演化中
+  drawPanel(rightX, panelW, state.mode, t, true);
+
+  // 标签
+  drawPanelLabels(leftX, rightX, panelW);
+}
+
+/* ============================================================
+   主循环
+============================================================ */
+let last = performance.now();
+
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+
+  if (state.playing && state.p < 1){
+    const dur = MODES[state.mode].dur;
+    state.p = Math.min(1, state.p + (dt / dur) * state.speed);
+    if (state.p >= 1){
+      state.playing = false;
+      btnPlay.textContent = '播放';
+    }
+  }
+
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ============================================================
+   尺寸
+============================================================ */
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = cv.getBoundingClientRect();
+  W = Math.max(1, r.width);
+  H = Math.max(1, r.height);
+  cv.width  = Math.round(W * dpr);
+  cv.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/* ============================================================
+   交互
+============================================================ */
+function setMode(mode){
+  state.mode = mode;
+  state.p = 0;
+  state.playing = true;
+  btnPlay.textContent = '暂停';
+
+  document.querySelectorAll('#tabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  descEl.innerHTML = MODES[mode].desc;
+}
+
+document.getElementById('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) setMode(b.dataset.mode);
+});
+
+btnPlay.addEventListener('click', () => {
+  if (state.p >= 1){ state.p = 0; state.playing = true; }
+  else state.playing = !state.playing;
+  btnPlay.textContent = state.playing ? '暂停' : '播放';
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  state.p = 0;
+  state.playing = true;
+  btnPlay.textContent = '暂停';
+});
+
+const spd = document.getElementById('speed');
+spd.addEventListener('input', () => {
+  state.speed = parseFloat(spd.value);
+  document.getElementById('spdVal').textContent = state.speed.toFixed(1) + '×';
+});
+
+/* ============================================================
+   启动
+============================================================ */
+new ResizeObserver(resize).observe(document.querySelector('.stage'));
+window.addEventListener('resize', resize);
+
+resize();
+descEl.innerHTML = MODES[state.mode].desc;
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
